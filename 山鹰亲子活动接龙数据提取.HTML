@@ -1,0 +1,223 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>家庭数据处理</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        textarea {
+            width: 100%;
+            height: 300px;
+            margin-bottom: 20px;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        #output {
+            width: 100%;
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            white-space: pre-wrap;
+            margin-top: 20px;
+            font-family: monospace;
+            min-height: 100px;
+        }
+        .button-container {
+            margin-top: 10px;
+            display: flex;
+            justify-content: flex-start;
+        }
+        .error {
+            color: red;
+            margin-top: 10px;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <h1>输入家庭活动信息</h1>
+    <textarea id="inputText" placeholder="在这里输入或多粘贴文本内容..."></textarea>
+    <div class="button-container">
+        <button onclick="processText()">处理数据</button>
+        <button onclick="copyToClipboard()">复制结果</button>
+    </div>
+    <div id="output"></div>
+    <div class="error" id="errorMessage"></div>
+
+    <script>
+        function processText() {
+            const inputText = document.getElementById('inputText').value;
+            const outputDiv = document.getElementById('output');
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = "";
+            
+            try {
+                const lines = inputText.trim().split('\n');
+                let data = [];
+                let current_difficulty = null;
+                let i = 0;
+                
+                while (i < lines.length) {
+                    const line = lines[i].trim();
+                    if (!line || line.includes('取消')) {
+                        i++;
+                        continue;
+                    }
+
+                    const difficultyMatch = line.match(/\/\/\/(一般|中等|困难|-)\/\/\//);
+                    if (difficultyMatch) {
+                        const difficulty = difficultyMatch[1];
+                        current_difficulty = {
+                            '一般': 1,
+                            '中等': 1000,
+                            '困难': 1000000,
+                            '-': 0.01
+                        }[difficulty];
+                        i++;
+                        continue;
+                    }
+
+                    const familyMatch = line.match(/([\w一-龥]+家)/);
+                    const familyName = familyMatch ? familyMatch[1] : '未知';
+
+                    const adultMatch = line.match(/(\d+)[大]/);
+                    const adultCount = adultMatch ? parseInt(adultMatch[1]) : 0;
+
+                    const childMatch = line.match(/(\d+)[小]/);
+                    const childCount = childMatch ? parseInt(childMatch[1]) : 0;
+
+                    let ages = [];
+                    const ageMatch = line.match(/[（(](\d+([、，,/–-]+\d+)*)/);
+                    if (ageMatch) {
+                        let ageStr = ageMatch[1];
+                        ageStr = ageStr.replace(/[^0-9]/g, ' ').trim();
+                        ages = ageStr.split(' ').map(Number).filter(age => age !== '');
+                    }
+
+                    // 补足5个年龄，不足用-1填充
+                    while (ages.length < 5) ages.push(-1);
+
+                    const insurance = line.includes('意外险') || line.includes('户外险') || line.includes('保险') ? '是' : '否';
+
+                    let errorMessages = [];
+                    if (adultCount === 0 && childCount !== 0) errorMessages.push('无成人陪同');
+                    if (adultCount !== 0 && childCount === 0) errorMessages.push('无小孩参加');
+                    if (adultCount === 0 && childCount === 0) errorMessages.push('大人/小孩数量信息有误');
+                    if (childCount !== ages.filter(age => age > 0).length) {
+                        errorMessages.push(`声明${childCount}小孩但检测到${ages.filter(age => age > 0).length}个有效年龄`);
+                    }
+                    if (insurance === '否') errorMessages.push('没有检测到保险信息');
+                    if (line.includes('未买') || line.includes('未购')) errorMessages.push('保险状态存疑');
+
+                    data.push({
+                        '家庭名': familyName,
+                        '难度系数': current_difficulty,
+                        '大人人数': adultCount,
+                        '小孩人数': childCount,
+                        '年龄信息': ages,
+                        '是否已购保险': insurance,
+                        '错误信息': errorMessages.join('; ')
+                    });
+                    i++;
+                }
+
+                // 合并同一家庭的数据
+                const processedData = {};
+                data.forEach(item => {
+                    const {家庭名} = item;
+                    if (!processedData[家庭名]) {
+                        processedData[家庭名] = {...item};
+                    } else {
+                        processedData[家庭名].大人人数 += item.大人人数;
+                        processedData[家庭名].小孩人数 += item.小孩人数;
+
+                        // 合并年龄信息，取前5个有效年龄
+                        const allAges = [
+                            ...processedData[家庭名].年龄信息,
+                            ...item.年龄信息
+                        ].filter(age => age !== -1);
+                        processedData[家庭名].年龄信息 = allAges.slice(0, 5);
+                        while (processedData[家庭名].年龄信息.length < 5) {
+                            processedData[家庭名].年龄信息.push(-1);
+                        }
+
+                        // 合并错误信息
+                        const allErrors = new Set([
+                            ...processedData[家庭名].错误信息.split('; '),
+                            ...item.错误信息.split('; ')
+                        ]);
+                        processedData[家庭名].错误信息 = [...allErrors].join('; ');
+                    }
+                });
+
+                // 生成最终输出文本，不包含表头
+                let outputText = "";
+                Object.values(processedData).forEach(item => {
+                    const row = [
+                        item.家庭名,
+                        item.难度系数,
+                        item.大人人数,
+                        item.小孩人数,
+                        item.年龄信息[0],
+                        item.年龄信息[1],
+                        item.年龄信息[2],
+                        item.年龄信息[3],
+                        item.年龄信息[4],
+                        item.是否已购保险,
+                        item.错误信息
+                    ];
+                    outputText += row.join(',') + "\n";
+                });
+
+                outputDiv.textContent = outputText;
+            } catch (error) {
+                outputDiv.textContent = "";
+                errorDiv.textContent = `处理出错: ${error.message}`;
+            }
+        }
+
+        function copyToClipboard() {
+            const outputDiv = document.getElementById('output');
+            const textToCopy = outputDiv.textContent;
+            
+            // 创建一个临时的文本区域来复制文本
+            const tempTextArea = document.createElement('textarea');
+            tempTextArea.value = textToCopy;
+            document.body.appendChild(tempTextArea);
+            
+            // 选择文本区域中的内容
+            tempTextArea.select();
+            tempTextArea.setSelectionRange(0, tempTextArea.value.length);
+            
+            try {
+                // 复制选中的文本到剪贴板
+                document.execCommand('copy');
+                alert('文本已复制到剪贴板！');
+            } catch (err) {
+                alert('复制失败：' + err.message);
+            } finally {
+                // 清理临时文本区域
+                document.body.removeChild(tempTextArea);
+            }
+        }
+    </script>
+</body>
+</html>
